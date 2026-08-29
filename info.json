@@ -1,10 +1,10 @@
 {
   "name": "factorio-priority-requests",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "title": "Priority Requesters",
-  "author": "GitHub Copilot",
+  "author": "EliteTech",
   "factorio_version": "2.1",
-  "description": "Adds chest-level priorities for requester chests by deferring lower-priority requests when supply is contested.",
+  "description": "Assign a priority (0-10) to each requester chest so robots service your most important requests first. When supply in a logistic network is contested, lower-priority chests automatically have their requests throttled until higher-priority chests are satisfied.",
   "dependencies": [
     "base >= 2.0.0"
   ]
