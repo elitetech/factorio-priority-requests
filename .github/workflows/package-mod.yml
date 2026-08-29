@@ -1,0 +1,63 @@
+name: Package mod
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read mod info
+        id: mod_info
+        run: |
+          name=$(jq -r '.name' info.json)
+          version=$(jq -r '.version' info.json)
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify tag matches mod version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          MOD_VERSION: ${{ steps.mod_info.outputs.version }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          expected="v${MOD_VERSION}"
+          if [ "$tag" != "$expected" ]; then
+            echo "::error::Tag '$tag' does not match info.json version '${MOD_VERSION}' (expected tag '$expected')"
+            exit 1
+          fi
+
+      - name: Build package
+        env:
+          PKG_NAME: ${{ steps.mod_info.outputs.name }}_${{ steps.mod_info.outputs.version }}
+        run: |
+          mkdir -p "dist/$PKG_NAME"
+          rsync -a \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='.gitignore' \
+            --exclude='screenshots' \
+            --exclude='dist' \
+            ./ "dist/$PKG_NAME/"
+          (cd dist && zip -r "${PKG_NAME}.zip" "$PKG_NAME")
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.mod_info.outputs.name }}_${{ steps.mod_info.outputs.version }}
+          path: dist/*.zip
+
+      - name: Attach zip to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
