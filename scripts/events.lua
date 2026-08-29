@@ -90,23 +90,10 @@ local function on_init_or_configuration_changed()
   state.init_globals()
   requester.register_existing_requesters()
   reconcile.reconcile_dirty_networks()
-  for _, player in pairs(game.players) do
-    gui.destroy_legacy_version_ui(player)
-  end
 end
 
 script.on_init(on_init_or_configuration_changed)
 script.on_configuration_changed(on_init_or_configuration_changed)
-
-script.on_event(defines.events.on_player_created, function(event)
-  local player = game.get_player(event.player_index)
-  gui.destroy_legacy_version_ui(player)
-end)
-
-script.on_event(defines.events.on_player_joined_game, function(event)
-  local player = game.get_player(event.player_index)
-  gui.destroy_legacy_version_ui(player)
-end)
 
 script.on_event(defines.events.on_built_entity, handle_built)
 script.on_event(defines.events.on_robot_built_entity, handle_built)

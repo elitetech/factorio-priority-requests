@@ -35,22 +35,6 @@ function gui.destroy_player_frame(player)
   end
 end
 
-function gui.destroy_legacy_version_ui(player)
-  if not player or not player.valid then
-    return
-  end
-
-  local top_label = player.gui.top[VERSION_LABEL_NAME]
-  if top_label and top_label.valid then
-    top_label.destroy()
-  end
-
-  local frame = player.gui.left[VERSION_FRAME_NAME]
-  if frame and frame.valid then
-    frame.destroy()
-  end
-end
-
 local function find_descendant_by_name(root, target_name)
   if not root or not root.valid then
     return nil
