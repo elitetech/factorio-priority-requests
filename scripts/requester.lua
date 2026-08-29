@@ -58,7 +58,6 @@ function requester.track_requester(entity)
     record = {
       entity = entity,
       priority = 5,
-      enabled = true,
       status = "unknown",
       network_key = network_key,
       desired_filters = filters.get_point_filter_definitions(point),
@@ -86,7 +85,6 @@ function requester.track_requester(entity)
 
   if previous_network_key ~= network_key then
     state.remove_member_from_network(previous_network_key, unit_number)
-    state.add_member_to_network(network_key, unit_number)
     state.mark_network_dirty(previous_network_key)
   end
 

@@ -6,27 +6,6 @@ local gui = require("scripts.gui")
 
 local reconcile = {}
 
-local function set_requester_enabled(entity, enabled)
-  if not requester.is_requester(entity) then
-    return
-  end
-
-  local point = entity:get_requester_point()
-  if point and point.valid then
-    for _, section in pairs(point.sections or {}) do
-      if section.valid and section.is_manual then
-        if section.active ~= enabled then
-          section.active = enabled
-        end
-      end
-    end
-
-    if point.enabled ~= enabled then
-      point.enabled = enabled
-    end
-  end
-end
-
 local function set_requester_status(record, status)
   if record then
     record.status = status
@@ -142,8 +121,6 @@ function reconcile.reconcile_network(network_key)
       end
     end
 
-    set_requester_enabled(record.entity, true)
-    record.enabled = true
     filters.apply_effective_requests(record, effective_filters)
 
     if not has_any_desired then
