@@ -58,6 +58,7 @@ function requester.track_requester(entity)
     record = {
       entity = entity,
       priority = 5,
+      priority_signal = nil,
       status = "unknown",
       network_key = network_key,
       desired_filters = filters.get_point_filter_definitions(point),
@@ -132,6 +133,33 @@ function requester.set_priority(unit_number, priority)
   state.mark_network_dirty(record.network_key)
 end
 
+function requester.set_priority_signal(unit_number, signal)
+  local record = storage.requesters[unit_number]
+  if not record then
+    return
+  end
+
+  record.priority_signal = signal
+  state.mark_network_dirty(record.network_key)
+end
+
+-- Reads record.priority_signal from the entity's circuit network (red+green combined)
+-- and updates record.priority accordingly. Called every reconcile pass, before records
+-- are sorted, so circuit-driven priority changes take effect immediately without needing
+-- a dedicated event (circuit signals can change every tick without raising one).
+function requester.update_priority_from_circuit(record)
+  if not record or not record.priority_signal or not record.entity.valid then
+    return
+  end
+
+  local value = record.entity.get_signal(
+    record.priority_signal,
+    defines.wire_connector_id.circuit_red,
+    defines.wire_connector_id.circuit_green
+  )
+  record.priority = math.max(0, value)
+end
+
 function requester.register_existing_requesters()
   local existing_requesters = storage.requesters or {}
 
@@ -148,6 +176,7 @@ function requester.register_existing_requesters()
         local existing = existing_requesters[entity.unit_number]
         if record and existing then
           record.priority = existing.priority or record.priority
+          record.priority_signal = existing.priority_signal
           if existing.desired_filters then
             record.desired_filters = filters.copy_filter_definitions(existing.desired_filters)
           elseif existing.desired_requests then

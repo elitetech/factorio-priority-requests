@@ -1,6 +1,7 @@
 local constants = {
   GUI_ROOT = "fpr_priority_frame",
   PRIORITY_DROPDOWN = "fpr_priority_dropdown",
+  PRIORITY_SIGNAL_BUTTON = "fpr_priority_signal_button",
   PRIORITY_TAG_KEY = "fpr_priority",
   STATUS_VALUE = "fpr_status_value",
   REQUESTS_LIST = "fpr_requests_list",

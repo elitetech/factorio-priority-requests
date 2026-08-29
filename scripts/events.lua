@@ -35,12 +35,40 @@ local function handle_logistic_slot_changed(event)
     return
   end
 
+  -- player_index is nil when the slot was changed by script rather than a player (per the
+  -- on_entity_logistic_slot_changed docs), which includes our own mod writing effective/
+  -- offset filters back to the point. Ignore those entirely instead of relying solely on
+  -- an applied_filters equality check: that comparison can race with exactly when
+  -- record.applied_filters gets updated relative to the write that triggered this event,
+  -- which can otherwise clobber record.desired_filters with a throttled/intermediate value.
+  if event.player_index == nil then
+    return
+  end
+
   local unit_number = event.entity.unit_number
   requester.track_requester(event.entity)
   local record = storage.requesters[unit_number]
   if record then
     local point = event.entity:get_requester_point()
     local current_filters = filters.get_point_filter_definitions(point)
+
+    local debug_setting = settings.global["fpr-debug-logging"]
+    if debug_setting and debug_setting.value then
+      local current_info, applied_info = {}, {}
+      for _, filter_def in ipairs(current_filters) do
+        current_info[#current_info + 1] = string.format("%s=%d", filter_def.value.name, filter_def.count)
+      end
+      for _, filter_def in ipairs(record.applied_filters or {}) do
+        applied_info[#applied_info + 1] = string.format("%s=%d", filter_def.value.name, filter_def.count)
+      end
+      log(string.format(
+        "[priority-requests] unit=%d slot_changed player=%s current={%s} applied={%s} equal=%s",
+        unit_number, tostring(event.player_index), table.concat(current_info, ", "),
+        table.concat(applied_info, ", "),
+        tostring(filters.filter_definitions_equal(current_filters, record.applied_filters))
+      ))
+    end
+
     if filters.filter_definitions_equal(current_filters, record.applied_filters) then
       return
     end
@@ -149,6 +177,25 @@ script.on_event(defines.events.on_gui_selection_state_changed, function(event)
   end
 
   requester.set_priority(player_state.opened_unit_number, priority)
+  reconcile.reconcile_dirty_networks()
+end)
+
+script.on_event(defines.events.on_gui_elem_changed, function(event)
+  local element = event.element
+  if not element or not element.valid then
+    return
+  end
+
+  if element.name ~= constants.PRIORITY_SIGNAL_BUTTON then
+    return
+  end
+
+  local player_state = storage.player_state[event.player_index]
+  if not player_state then
+    return
+  end
+
+  requester.set_priority_signal(player_state.opened_unit_number, element.elem_value)
   reconcile.reconcile_dirty_networks()
 end)
 

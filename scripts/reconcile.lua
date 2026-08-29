@@ -12,6 +12,12 @@ local function set_requester_status(record, status)
   end
 end
 
+local function set_point_enabled(point, enabled)
+  if point and point.valid and point.enabled ~= enabled then
+    point.enabled = enabled
+  end
+end
+
 local function sort_records(records)
   table.sort(records, function(left, right)
     if left.priority == right.priority then
@@ -45,6 +51,7 @@ function reconcile.reconcile_network(network_key)
       if current_network_key ~= record.network_key then
         requester.track_requester(record.entity)
       else
+        requester.update_priority_from_circuit(record)
         table.insert(records, record)
         if not network then
           local point = record.entity:get_requester_point()
@@ -65,11 +72,53 @@ function reconcile.reconcile_network(network_key)
   sort_records(records)
   local highest_priority = records[1] and records[1].priority or 0
   local remaining_supply = {}
+  local debug_setting = settings.global["fpr-debug-logging"]
+  local debug_logging = debug_setting ~= nil and debug_setting.value
 
   for _, record in ipairs(records) do
     local point = record.entity:get_requester_point()
+    local circuit_controlled = filters.has_circuit_controlled_section(point)
+
+    if debug_logging then
+      local section_info = {}
+      for _, section in pairs(point and point.sections or {}) do
+        section_info[#section_info + 1] = string.format(
+          "type=%s manual=%s group=%s filters=%d",
+          tostring(section.type), tostring(section.is_manual), tostring(section.group), section.filters_count
+        )
+      end
+      log(string.format(
+        "[priority-requests] unit=%d circuit_controlled=%s sections={%s}",
+        record.entity.unit_number, tostring(circuit_controlled), table.concat(section_info, "; ")
+      ))
+    end
+
+    if circuit_controlled then
+      -- Circuit-driven demand changes with signals every tick, not just when a slot is
+      -- manually edited, so it can't be cached like a manual chest's desired_filters.
+      -- point.filters is the resolved view and would already include our own previously
+      -- written offset, so clear it first to read the raw circuit-requested amount.
+      local offset_section = filters.find_offset_section(point, false)
+      if offset_section and offset_section.filters_count > 0 then
+        offset_section.filters = {}
+      end
+      record.desired_filters = filters.get_point_filter_definitions(point)
+
+      if debug_logging then
+        local desired_info = {}
+        for _, filter_def in ipairs(record.desired_filters) do
+          desired_info[#desired_info + 1] = string.format("%s=%d", filter_def.value.name, filter_def.count)
+        end
+        log(string.format(
+          "[priority-requests] unit=%d raw circuit desired={%s}",
+          record.entity.unit_number, table.concat(desired_info, ", ")
+        ))
+      end
+    end
+
     local desired_filters = record.desired_filters or {}
     local effective_filters = {}
+    local offset_filters = {}
 
     local has_any_desired = false
     local has_gross_missing = false
@@ -117,11 +166,50 @@ function reconcile.reconcile_network(network_key)
 
         if effective_count < desired_count then
           has_unallocated = true
+
+          if circuit_controlled then
+            -- Logistic sections combine additively per item, so a negative min in our own
+            -- manual section offsets (reduces) what the circuit-controlled section is
+            -- requesting, without needing write access to that read-only section.
+            offset_filters[#offset_filters + 1] = {
+              value = {
+                type = desired_filter.value.type,
+                name = desired_filter.value.name,
+                quality = desired_filter.value.quality,
+                comparator = desired_filter.value.comparator
+              },
+              min = effective_count - desired_count
+            }
+          end
         end
       end
     end
 
-    filters.apply_effective_requests(record, effective_filters)
+    if circuit_controlled then
+      if debug_logging then
+        local offset_info = {}
+        for _, offset in ipairs(offset_filters) do
+          offset_info[#offset_info + 1] = string.format("%s=%d", offset.value.name, offset.min)
+        end
+        log(string.format(
+          "[priority-requests] unit=%d priority=%d highest=%d has_unallocated=%s offsets={%s}",
+          record.entity.unit_number, record.priority, highest_priority, tostring(has_unallocated),
+          table.concat(offset_info, ", ")
+        ))
+      end
+      filters.apply_circuit_offsets(record, effective_filters, offset_filters)
+      if debug_logging then
+        local offset_section = filters.find_offset_section(point, false)
+        log(string.format(
+          "[priority-requests] unit=%d offset_section=%s filters_count=%s",
+          record.entity.unit_number, tostring(offset_section and offset_section.valid),
+          tostring(offset_section and offset_section.filters_count)
+        ))
+      end
+    else
+      filters.apply_effective_requests(record, effective_filters)
+    end
+    set_point_enabled(point, true)
 
     if not has_any_desired then
       set_requester_status(record, "no_requests")
