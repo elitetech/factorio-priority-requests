@@ -1,0 +1,11 @@
+{
+  "name": "factorio-priority-requests",
+  "version": "0.1.25",
+  "title": "Priority Requesters",
+  "author": "GitHub Copilot",
+  "factorio_version": "2.1",
+  "description": "Adds chest-level priorities for requester chests by deferring lower-priority requests when supply is contested.",
+  "dependencies": [
+    "base >= 2.0.0"
+  ]
+}
