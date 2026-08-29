@@ -49,7 +49,14 @@ When enough items exist for everyone, every requester chest keeps its full reque
 
 - `info.json` contains mod metadata.
 - `settings.lua` defines the reconciliation interval setting (`fpr-update-interval`).
-- `control.lua` contains the runtime logic, event hooks, reconciliation scheduler, and GUI.
+- `control.lua` is the runtime entry point; it just requires `scripts/events.lua`.
+- `scripts/constants.lua` holds shared GUI element names and priority level values.
+- `scripts/state.lua` initializes save data and tracks network membership/dirty state.
+- `scripts/filters.lua` normalizes, compares, and applies requester logistic filter definitions, and computes network supply.
+- `scripts/requester.lua` tracks requester chests, their network association, and priority.
+- `scripts/gui.lua` builds and updates the per-chest priority panel.
+- `scripts/reconcile.lua` runs the priority/supply-reservation algorithm per network.
+- `scripts/events.lua` wires the modules together and registers all Factorio event handlers.
 - `locale/en/factorio-priority-requests.cfg` contains English locale strings.
 
 ## Suggested test cases
