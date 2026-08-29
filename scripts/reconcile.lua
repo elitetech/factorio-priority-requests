@@ -161,7 +161,17 @@ function reconcile.reconcile_network(network_key)
 end
 
 function reconcile.reconcile_dirty_networks()
+  -- Snapshot the dirty keys before reconciling: reconcile_network() can mark other
+  -- networks dirty again (e.g. via track_requester when a chest's network changes),
+  -- and inserting new keys into a table while pairs() is traversing it is undefined
+  -- behavior in Lua. Any network dirtied as a side effect here is picked up on the
+  -- next pass (direct event or periodic on_tick re-mark).
+  local network_keys = {}
   for network_key in pairs(storage.dirty_networks) do
+    network_keys[#network_keys + 1] = network_key
+  end
+
+  for _, network_key in ipairs(network_keys) do
     reconcile.reconcile_network(network_key)
   end
 

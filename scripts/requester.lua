@@ -32,7 +32,11 @@ function requester.get_network_key(entity, fallback_key)
     return string.format("%d:%d:%d", entity.force_index, entity.surface_index, network.network_id)
   end
 
-  if fallback_key then
+  -- Only fall back to a previous key if it was itself a "pending" placeholder, not a
+  -- real network key. Otherwise an entity that has actually lost its network would
+  -- stay grouped under its old real network, letting reconciliation reserve shared
+  -- supply for a chest that can no longer receive deliveries there.
+  if fallback_key and fallback_key:match("^pending:") then
     return fallback_key
   end
 
@@ -97,7 +101,12 @@ function requester.clean_requester(unit_number)
   end
 
   state.remove_member_from_network(record.network_key, unit_number)
-  state.mark_network_dirty(record.network_key)
+  -- Only re-dirty the network if it still has other members; remove_member_from_network
+  -- already clears the dirty flag when it empties the network, and re-marking it here
+  -- would just trigger a pointless reconcile pass for a network that no longer exists.
+  if storage.network_members[record.network_key] then
+    state.mark_network_dirty(record.network_key)
+  end
   storage.requesters[unit_number] = nil
 
   if requester.on_requester_removed then

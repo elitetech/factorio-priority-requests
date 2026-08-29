@@ -1,6 +1,7 @@
 -- All GUI construction/update logic for the per-chest priority panel.
 local constants = require("scripts.constants")
 local requester = require("scripts.requester")
+local filters = require("scripts.filters")
 
 local gui = {}
 
@@ -61,30 +62,40 @@ local function summarize_filter_counts(filter_list)
     local value = filter and filter.value or {}
     local name = value.name
     if name then
-      local count = math.max(0, math.floor(filter.count or 0))
-      summary[name] = (summary[name] or 0) + count
+      -- Key on the full filter definition, not just the item name: two filters for
+      -- the same item with different quality/comparator/request_from represent
+      -- distinct requests and must not be merged into one tile's count.
+      local key = filters.get_filter_definition_key(filter)
+      local entry = summary[key]
+      if not entry then
+        entry = {
+          name = name,
+          quality = value.quality,
+          comparator = value.comparator,
+          request_from = filter.request_from,
+          count = 0
+        }
+        summary[key] = entry
+      end
+      entry.count = entry.count + math.max(0, math.floor(filter.count or 0))
     end
   end
   return summary
 end
 
-local function get_logistic_delivery_metrics(entity, item_name)
-  local on_the_way = 0
+local function get_logistic_delivery_metrics(entity, point, filter_def)
+  local on_the_way = filters.get_targeted_count_for_filter(point, filter_def)
   local storage_count = 0
 
-  if entity and entity.valid and requester.is_requester(entity) then
-    local requester_point = entity:get_requester_point()
-    if requester_point and requester_point.valid then
-      for _, delivery in ipairs(requester_point.targeted_items_deliver or {}) do
-        if delivery.name == item_name then
-          on_the_way = on_the_way + (delivery.count or 0)
-        end
-      end
-    end
-
+  if entity and entity.valid then
     local network = entity.logistic_network
     if network and network.valid then
-      storage_count = network.get_item_count(item_name, "storage") or 0
+      local value = filter_def.value
+      if value.quality then
+        storage_count = network.get_item_count({name = value.name, quality = value.quality}, "storage") or 0
+      else
+        storage_count = network.get_item_count(value.name, "storage") or 0
+      end
     end
   end
 
@@ -99,32 +110,39 @@ local function rebuild_request_tiles(frame, entity, desired_filters, applied_fil
 
   local desired_summary = summarize_filter_counts(desired_filters)
   local applied_summary = summarize_filter_counts(applied_filters)
-  local item_names = {}
-  for item_name in pairs(desired_summary) do
-    item_names[#item_names + 1] = item_name
+  local keys = {}
+  for key in pairs(desired_summary) do
+    keys[#keys + 1] = key
   end
-  for item_name in pairs(applied_summary) do
-    if not desired_summary[item_name] then
-      item_names[#item_names + 1] = item_name
+  for key in pairs(applied_summary) do
+    if not desired_summary[key] then
+      keys[#keys + 1] = key
     end
   end
-  table.sort(item_names)
+  table.sort(keys)
+
+  local point = (entity and entity.valid) and entity:get_requester_point() or nil
 
   local list = frame.add({type = "flow", name = constants.REQUESTS_LIST, direction = "horizontal"})
   list.style.horizontally_stretchable = false
   list.style.vertically_stretchable = false
 
-  for _, item_name in ipairs(item_names) do
-    local desired_count = desired_summary[item_name] or 0
-    local current_count = (entity and entity.valid) and entity.get_item_count(item_name) or 0
-    local on_the_way, storage_count = get_logistic_delivery_metrics(entity, item_name)
-    local prototype = prototypes.item[item_name]
-    local item_title = prototype and prototype.localised_name or item_name
+  for _, key in ipairs(keys) do
+    local entry = desired_summary[key] or applied_summary[key]
+    local desired_count = desired_summary[key] and desired_summary[key].count or 0
+    local filter_def = {
+      value = {type = "item", name = entry.name, quality = entry.quality, comparator = entry.comparator},
+      request_from = entry.request_from
+    }
+    local current_count = (entity and entity.valid) and filters.get_entity_count_for_filter(entity, filter_def) or 0
+    local on_the_way, storage_count = get_logistic_delivery_metrics(entity, point, filter_def)
+    local prototype = prototypes.item[entry.name]
+    local item_title = prototype and prototype.localised_name or entry.name
     local tile_size = 40
     local tile = list.add({
       type = "sprite-button",
-      sprite = "item/" .. item_name,
-      elem_tooltip = {type = "item", name = item_name},
+      sprite = "item/" .. entry.name,
+      elem_tooltip = {type = "item", name = entry.name},
       tooltip = {
         "",
         {"fpr.item_tooltip_title", item_title},
