@@ -192,8 +192,9 @@ function gui.update_player_gui(player)
   end
 
   local priority_dropdown = find_descendant_by_name(frame, constants.PRIORITY_DROPDOWN)
+  local priority_signal_button = find_descendant_by_name(frame, constants.PRIORITY_SIGNAL_BUTTON)
   local status_value = find_descendant_by_name(frame, constants.STATUS_VALUE)
-  if not priority_dropdown or not status_value then
+  if not priority_dropdown or not priority_signal_button or not status_value then
     gui.destroy_player_frame(player)
     create_or_update_gui(player, record.entity)
     frame = gui.find_player_frame(player)
@@ -202,8 +203,9 @@ function gui.update_player_gui(player)
     end
 
     priority_dropdown = find_descendant_by_name(frame, constants.PRIORITY_DROPDOWN)
+    priority_signal_button = find_descendant_by_name(frame, constants.PRIORITY_SIGNAL_BUTTON)
     status_value = find_descendant_by_name(frame, constants.STATUS_VALUE)
-    if not priority_dropdown or not status_value then
+    if not priority_dropdown or not priority_signal_button or not status_value then
       return
     end
   end
@@ -212,6 +214,8 @@ function gui.update_player_gui(player)
   if priority_dropdown.selected_index ~= selected_index then
     priority_dropdown.selected_index = selected_index
   end
+  priority_dropdown.enabled = not record.priority_signal
+  priority_signal_button.elem_value = record.priority_signal
   status_value.caption = {"fpr.status_" .. (record.status or "unknown")}
   rebuild_request_tiles(frame, record.entity, record.desired_filters, record.applied_filters)
 end
@@ -280,6 +284,13 @@ create_or_update_gui = function(player, entity)
   })
   priority_dropdown.style.minimal_width = constants.DROPDOWN_WIDTH
   priority_dropdown.style.maximal_width = constants.DROPDOWN_WIDTH
+
+  priority_flow.add({
+    type = "choose-elem-button",
+    name = constants.PRIORITY_SIGNAL_BUTTON,
+    elem_type = "signal",
+    tooltip = {"fpr.priority_signal_tooltip"}
+  })
 
   frame.add({type = "flow", name = constants.REQUESTS_LIST, direction = "horizontal"})
 
