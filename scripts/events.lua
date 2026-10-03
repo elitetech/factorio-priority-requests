@@ -102,6 +102,10 @@ local function handle_settings_pasted(event)
   end
 
   requester.track_requester(event.source)
+  -- Copy-paste duplicates logistic sections/groups, including this mod's hidden offset
+  -- section from the source chest. Remove any mod-created offset sections on the
+  -- destination so each requester gets a fresh per-entity offset section as needed.
+  filters.cleanup_offset_sections_for_entity(event.destination, event.destination.unit_number)
   requester.track_requester(event.destination)
 
   local source = storage.requesters[event.source.unit_number]

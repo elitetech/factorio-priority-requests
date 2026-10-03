@@ -3,7 +3,8 @@
 local filters = {}
 
 filters.LEGACY_CIRCUIT_OFFSET_GROUP = "priority-requests:circuit-offset"
-filters.OFFSET_GROUP_PREFIX = "priority-requests:offset:"
+filters.LEGACY_OFFSET_GROUP_PREFIX = "priority-requests:offset:"
+filters.OFFSET_GROUP_PREFIX = "~priority-requests:offset:"
 
 function filters.get_offset_group_name(unit_number)
   return string.format("%s%d", filters.OFFSET_GROUP_PREFIX, unit_number or 0)
@@ -15,6 +16,7 @@ function filters.is_offset_group_name(group)
   end
 
   return group == filters.LEGACY_CIRCUIT_OFFSET_GROUP
+    or string.sub(group, 1, #filters.LEGACY_OFFSET_GROUP_PREFIX) == filters.LEGACY_OFFSET_GROUP_PREFIX
     or string.sub(group, 1, #filters.OFFSET_GROUP_PREFIX) == filters.OFFSET_GROUP_PREFIX
 end
 
@@ -53,7 +55,8 @@ function filters.cleanup_offset_sections_for_entity(entity, unit_number)
 
   local section_indexes = {}
   for _, section in pairs(point.sections or {}) do
-    if section.valid and section.is_manual and groups_to_cleanup[section.group] then
+    if section.valid and section.is_manual and filters.is_offset_group_name(section.group) then
+      groups_to_cleanup[section.group] = true
       section_indexes[#section_indexes + 1] = section.index
     end
   end
@@ -360,6 +363,8 @@ function filters.find_offset_section(point, offset_group, create)
   offset_group = offset_group or filters.LEGACY_CIRCUIT_OFFSET_GROUP
   local empty_manual_section = nil
   local has_circuit_controlled = false
+  local foreign_offset_indexes = {}
+  local foreign_offset_groups = {}
   for _, section in pairs(point.sections or {}) do
     if section.valid and section.is_manual then
       if section.group == offset_group then
@@ -369,11 +374,36 @@ function filters.find_offset_section(point, offset_group, create)
         section.group = offset_group
         return section
       end
-      if not empty_manual_section and section.filters_count == 0 then
+      if filters.is_offset_group_name(section.group) then
+        foreign_offset_indexes[#foreign_offset_indexes + 1] = section.index
+        foreign_offset_groups[section.group] = true
+      elseif not empty_manual_section and section.filters_count == 0 then
         empty_manual_section = section
       end
     elseif section.valid and not section.is_manual then
       has_circuit_controlled = true
+    end
+  end
+
+  if #foreign_offset_indexes > 0 then
+    table.sort(foreign_offset_indexes, function(left, right)
+      return left > right
+    end)
+
+    for _, section_index in ipairs(foreign_offset_indexes) do
+      local removed = point.remove_section(section_index)
+      if not removed then
+        local section = point.get_section(section_index)
+        if section and section.valid and section.is_manual then
+          section.filters = {}
+          section.group = ""
+        end
+      end
+    end
+
+    local force = point.force
+    for group_name in pairs(foreign_offset_groups) do
+      filters.cleanup_unused_logistic_group(force, group_name)
     end
   end
 
@@ -509,26 +539,35 @@ function filters.apply_effective_requests(record, effective_filters)
   local effective_by_key = {}
   for _, filter_def in ipairs(effective_filters or {}) do
     local key = filters.get_filter_definition_key(filter_def)
-    effective_by_key[key] = math.max(0, math.floor(filter_def.count or 0))
+    effective_by_key[key] = (effective_by_key[key] or 0) + math.max(0, math.floor(filter_def.count or 0))
   end
 
-  local offset_filters = {}
+  local desired_by_key = {}
+  local filter_value_by_key = {}
   for _, desired_filter in ipairs(record.desired_filters or {}) do
     local desired_count = math.max(0, math.floor(desired_filter.count or 0))
     if desired_count > 0 then
       local key = filters.get_filter_definition_key(desired_filter)
-      local effective_count = effective_by_key[key] or 0
-      if effective_count < desired_count then
-        offset_filters[#offset_filters + 1] = {
-          value = {
-            type = desired_filter.value.type,
-            name = desired_filter.value.name,
-            quality = desired_filter.value.quality,
-            comparator = desired_filter.value.comparator
-          },
-          min = effective_count - desired_count
+      desired_by_key[key] = (desired_by_key[key] or 0) + desired_count
+      if not filter_value_by_key[key] then
+        filter_value_by_key[key] = {
+          type = desired_filter.value.type,
+          name = desired_filter.value.name,
+          quality = desired_filter.value.quality,
+          comparator = desired_filter.value.comparator
         }
       end
+    end
+  end
+
+  local offset_filters = {}
+  for key, desired_count in pairs(desired_by_key) do
+    local effective_count = effective_by_key[key] or 0
+    if effective_count < desired_count then
+      offset_filters[#offset_filters + 1] = {
+        value = filter_value_by_key[key],
+        min = effective_count - desired_count
+      }
     end
   end
 
