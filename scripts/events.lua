@@ -50,7 +50,7 @@ local function handle_logistic_slot_changed(event)
   local record = storage.requesters[unit_number]
   if record then
     local point = event.entity:get_requester_point()
-    local current_filters = filters.get_point_filter_definitions(point)
+    local current_filters = filters.get_desired_filter_definitions(point, unit_number)
 
     local debug_setting = settings.global["fpr-debug-logging"]
     if debug_setting and debug_setting.value then
@@ -102,6 +102,10 @@ local function handle_settings_pasted(event)
   end
 
   requester.track_requester(event.source)
+  -- Copy-paste duplicates logistic sections/groups, including this mod's hidden offset
+  -- section from the source chest. Remove any mod-created offset sections on the
+  -- destination so each requester gets a fresh per-entity offset section as needed.
+  filters.cleanup_offset_sections_for_entity(event.destination, event.destination.unit_number)
   requester.track_requester(event.destination)
 
   local source = storage.requesters[event.source.unit_number]
@@ -117,6 +121,7 @@ end
 local function on_init_or_configuration_changed()
   state.init_globals()
   requester.register_existing_requesters()
+  filters.cleanup_orphaned_offset_groups()
   reconcile.reconcile_dirty_networks()
 end
 

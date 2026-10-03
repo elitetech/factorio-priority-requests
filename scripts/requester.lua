@@ -12,6 +12,7 @@ requester.on_requester_removed = nil
 function requester.is_requester(entity)
   return entity
     and entity.valid
+    and entity.type == "logistic-container"
     and entity.unit_number
     and entity.get_requester_point
     and entity:get_requester_point() ~= nil
@@ -61,7 +62,7 @@ function requester.track_requester(entity)
       priority_signal = nil,
       status = "unknown",
       network_key = network_key,
-      desired_filters = filters.get_point_filter_definitions(point),
+      desired_filters = filters.get_desired_filter_definitions(point, unit_number),
       applied_filters = nil
     }
     storage.requesters[unit_number] = record
@@ -74,7 +75,7 @@ function requester.track_requester(entity)
         record.desired_requests = nil
       else
         local point = entity:get_requester_point()
-        record.desired_filters = filters.get_point_filter_definitions(point)
+        record.desired_filters = filters.get_desired_filter_definitions(point, unit_number)
       end
     end
 
@@ -97,6 +98,10 @@ function requester.clean_requester(unit_number)
   local record = storage.requesters[unit_number]
   if not record then
     return
+  end
+
+  if record.entity and record.entity.valid then
+    filters.cleanup_offset_sections_for_entity(record.entity, unit_number)
   end
 
   state.remove_member_from_network(record.network_key, unit_number)
@@ -188,6 +193,8 @@ function requester.register_existing_requesters()
           elseif existing.applied_requests then
             record.applied_filters = filters.legacy_counts_to_filter_definitions(existing.applied_requests)
           end
+
+          filters.restore_legacy_manual_requests_if_needed(record)
         end
       end
     end

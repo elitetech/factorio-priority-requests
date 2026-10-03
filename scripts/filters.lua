@@ -2,6 +2,102 @@
 -- data read from the game, comparing/copying definitions, and computing supply.
 local filters = {}
 
+filters.LEGACY_CIRCUIT_OFFSET_GROUP = "priority-requests:circuit-offset"
+filters.LEGACY_OFFSET_GROUP_PREFIX = "priority-requests:offset:"
+filters.OFFSET_GROUP_PREFIX = "~priority-requests:offset:"
+
+function filters.get_offset_group_name(unit_number)
+  return string.format("%s%d", filters.OFFSET_GROUP_PREFIX, unit_number or 0)
+end
+
+function filters.is_offset_group_name(group)
+  if not group then
+    return false
+  end
+
+  return group == filters.LEGACY_CIRCUIT_OFFSET_GROUP
+    or string.sub(group, 1, #filters.LEGACY_OFFSET_GROUP_PREFIX) == filters.LEGACY_OFFSET_GROUP_PREFIX
+    or string.sub(group, 1, #filters.OFFSET_GROUP_PREFIX) == filters.OFFSET_GROUP_PREFIX
+end
+
+function filters.cleanup_unused_logistic_group(force, group_name)
+  if not force or not force.valid or not group_name or group_name == "" then
+    return false
+  end
+
+  local group = force.get_logistic_group(group_name, defines.logistic_group_type.with_trash)
+  if not group then
+    return false
+  end
+
+  if #(group.members or {}) > 0 then
+    return false
+  end
+
+  force.delete_logistic_group(group_name, defines.logistic_group_type.with_trash)
+  return true
+end
+
+function filters.cleanup_offset_sections_for_entity(entity, unit_number)
+  if not entity or not entity.valid or not entity.get_requester_point then
+    return
+  end
+
+  local point = entity:get_requester_point()
+  if not point or not point.valid then
+    return
+  end
+
+  local groups_to_cleanup = {}
+  local primary_group = filters.get_offset_group_name(unit_number or entity.unit_number)
+  groups_to_cleanup[primary_group] = true
+  groups_to_cleanup[filters.LEGACY_CIRCUIT_OFFSET_GROUP] = true
+
+  local section_indexes = {}
+  for _, section in pairs(point.sections or {}) do
+    if section.valid and section.is_manual and filters.is_offset_group_name(section.group) then
+      groups_to_cleanup[section.group] = true
+      section_indexes[#section_indexes + 1] = section.index
+    end
+  end
+
+  table.sort(section_indexes, function(left, right)
+    return left > right
+  end)
+
+  for _, section_index in ipairs(section_indexes) do
+    local removed = point.remove_section(section_index)
+    if not removed then
+      local section = point.get_section(section_index)
+      if section and section.valid and section.is_manual then
+        section.filters = {}
+        section.group = ""
+      end
+    end
+  end
+
+  local force = point.force
+  for group_name in pairs(groups_to_cleanup) do
+    filters.cleanup_unused_logistic_group(force, group_name)
+  end
+end
+
+function filters.cleanup_orphaned_offset_groups()
+  for _, force in pairs(game.forces or {}) do
+    local groups = force.get_logistic_groups(defines.logistic_group_type.with_trash) or {}
+    for group_name, group in pairs(groups) do
+      local name = group_name
+      if type(group_name) ~= "string" and group and group.name then
+        name = group.name
+      end
+
+      if type(name) == "string" and filters.is_offset_group_name(name) then
+        filters.cleanup_unused_logistic_group(force, name)
+      end
+    end
+  end
+end
+
 function filters.get_supply_for_filter(network, filter_def)
   if not network or not network.valid then
     return 0
@@ -32,29 +128,35 @@ function filters.get_supply_for_filter(network, filter_def)
 end
 
 function filters.normalize_filter_definition(filter)
-  if not filter or not filter.name then
+  if not filter then
     return nil
   end
 
-  local filter_type = filter.type or "item"
+  local value = filter.value or filter
+  local filter_name = filter.name or value.name
+  if not filter_name then
+    return nil
+  end
+
+  local filter_type = filter.type or value.type or "item"
   if filter_type ~= "item" then
     return nil
   end
 
   local count = math.max(0, math.floor(filter.count or filter.min or 0))
-  local value = {
+  local normalized_value = {
     type = "item",
-    name = filter.name
+    name = filter_name
   }
-  if filter.quality then
-    value.quality = filter.quality
+  if filter.quality or value.quality then
+    normalized_value.quality = filter.quality or value.quality
   end
-  if filter.comparator then
-    value.comparator = filter.comparator
+  if filter.comparator or value.comparator then
+    normalized_value.comparator = filter.comparator or value.comparator
   end
 
   return {
-    value = value,
+    value = normalized_value,
     count = count,
     minimum_delivery_count = filter.minimum_delivery_count,
     request_from = filter.request_from
@@ -212,7 +314,7 @@ function filters.find_manual_sections(point)
     -- the player edits in the GUI. Including it here could pick it as the "primary"
     -- section to write effective requests into (leaving the player's real section
     -- untouched), or double-count filters additively across both sections.
-    if section.valid and section.is_manual and section.group ~= filters.CIRCUIT_OFFSET_GROUP then
+    if section.valid and section.is_manual and not filters.is_offset_group_name(section.group) then
       sections[#sections + 1] = section
     end
   end
@@ -222,7 +324,7 @@ function filters.find_manual_sections(point)
   -- request items on top of what the circuit network is already requesting instead
   -- of replacing it, since circuit-controlled sections can't be written to or removed.
   if #sections == 0 and total_sections == 0 then
-    local ok, created = pcall(function() return point:add_section() end)
+    local ok, created = pcall(function() return point.add_section() end)
     if ok and created and created.valid and created.is_manual then
       sections[1] = created
     end
@@ -258,25 +360,56 @@ end
 -- requester points. Logistic sections combine additively per item, and LogisticFilter.min
 -- accepts negative values, so writing a negative min here offsets (reduces) the amount the
 -- circuit network is requesting for that item without touching the read-only circuit section.
-filters.CIRCUIT_OFFSET_GROUP = "priority-requests:circuit-offset"
-
-function filters.find_offset_section(point, create)
+function filters.find_offset_section(point, offset_group, create)
   if not point or not point.valid then
     return nil
   end
 
+  offset_group = offset_group or filters.LEGACY_CIRCUIT_OFFSET_GROUP
   local empty_manual_section = nil
-  local total_sections = 0
-
+  local has_circuit_controlled = false
+  local foreign_offset_indexes = {}
+  local foreign_offset_groups = {}
   for _, section in pairs(point.sections or {}) do
-    total_sections = total_sections + 1
     if section.valid and section.is_manual then
-      if section.group == filters.CIRCUIT_OFFSET_GROUP then
+      if section.group == offset_group then
         return section
       end
-      if not empty_manual_section and section.filters_count == 0 then
+      if section.group == filters.LEGACY_CIRCUIT_OFFSET_GROUP then
+        section.group = offset_group
+        filters.cleanup_unused_logistic_group(point.force, filters.LEGACY_CIRCUIT_OFFSET_GROUP)
+        return section
+      end
+      if filters.is_offset_group_name(section.group) then
+        foreign_offset_indexes[#foreign_offset_indexes + 1] = section.index
+        foreign_offset_groups[section.group] = true
+      elseif not empty_manual_section and section.filters_count == 0 and (section.group == "" or section.group == nil) then
         empty_manual_section = section
       end
+    elseif section.valid and not section.is_manual then
+      has_circuit_controlled = true
+    end
+  end
+
+  if #foreign_offset_indexes > 0 then
+    table.sort(foreign_offset_indexes, function(left, right)
+      return left > right
+    end)
+
+    for _, section_index in ipairs(foreign_offset_indexes) do
+      local removed = point.remove_section(section_index)
+      if not removed then
+        local section = point.get_section(section_index)
+        if section and section.valid and section.is_manual then
+          section.filters = {}
+          section.group = ""
+        end
+      end
+    end
+
+    local force = point.force
+    for group_name in pairs(foreign_offset_groups) do
+      filters.cleanup_unused_logistic_group(force, group_name)
     end
   end
 
@@ -284,25 +417,111 @@ function filters.find_offset_section(point, create)
     return nil
   end
 
-  -- Points that already have a circuit-controlled section appear to cap the number of
-  -- sections they can hold, making add_section() fail ("bad self") once 2 sections
-  -- already exist. Reuse an existing empty manual section for our offsets instead of
-  -- adding a new one whenever possible; only try to add one when the point has no
-  -- sections at all.
-  if empty_manual_section then
-    empty_manual_section.group = filters.CIRCUIT_OFFSET_GROUP
+  -- Some points with circuit-controlled sections appear to cap section count and can
+  -- reject add_section() once existing sections are present. For those, reuse an empty
+  -- manual section if available. For normal manual requesters, never hijack an existing
+  -- empty manual section: always create a dedicated new section.
+  if has_circuit_controlled and empty_manual_section then
+    empty_manual_section.group = offset_group
     return empty_manual_section
   end
 
-  if total_sections == 0 then
-    local ok, created = pcall(function() return point:add_section() end)
-    if ok and created and created.valid and created.is_manual then
-      created.group = filters.CIRCUIT_OFFSET_GROUP
-      return created
-    end
+  local ok, created = pcall(function() return point.add_section() end)
+  if ok and created and created.valid and created.is_manual then
+    created.group = offset_group
+    return created
   end
 
   return nil
+end
+
+function filters.get_desired_filter_definitions(point, unit_number)
+  if not point or not point.valid then
+    return {}
+  end
+
+  local offset_group = filters.get_offset_group_name(unit_number)
+  local definitions = {}
+  local section_count = 0
+
+  for _, section in pairs(point.sections or {}) do
+    if section and section.valid then
+      section_count = section_count + 1
+      if section.group ~= offset_group and not filters.is_offset_group_name(section.group) then
+        local section_filters = section.filters or {}
+        table.sort(section_filters, function(left, right)
+          return (left.index or 0) < (right.index or 0)
+        end)
+
+        for _, filter in ipairs(section_filters) do
+          local definition = filters.normalize_filter_definition(filter)
+          if definition then
+            definitions[#definitions + 1] = definition
+          end
+        end
+      end
+    end
+  end
+
+  if section_count == 0 then
+    return filters.get_point_filter_definitions(point)
+  end
+
+  return definitions
+end
+
+function filters.restore_legacy_manual_requests_if_needed(record)
+  if not record or not record.entity or not record.entity.valid then
+    return false
+  end
+
+  local desired_filters = record.desired_filters or {}
+  local applied_filters = record.applied_filters or {}
+  if #desired_filters == 0 or #applied_filters == 0 then
+    return false
+  end
+
+  if filters.filter_definitions_equal(desired_filters, applied_filters) then
+    return false
+  end
+
+  local point = record.entity:get_requester_point()
+  if not point or not point.valid then
+    return false
+  end
+
+  if filters.has_circuit_controlled_section(point) then
+    return false
+  end
+
+  local current_filters = filters.get_desired_filter_definitions(point, record.entity.unit_number)
+  if not filters.filter_definitions_equal(current_filters, applied_filters) then
+    return false
+  end
+
+  local sections = filters.find_manual_sections(point)
+  if #sections == 0 then
+    return false
+  end
+
+  local restored_filters = {}
+  for _, filter_def in ipairs(desired_filters) do
+    local count = math.max(0, math.floor(filter_def.count or 0))
+    restored_filters[#restored_filters + 1] = {
+      value = {
+        type = filter_def.value.type,
+        name = filter_def.value.name,
+        quality = filter_def.value.quality,
+        comparator = filter_def.value.comparator
+      },
+      min = count,
+      minimum_delivery_count = filter_def.minimum_delivery_count,
+      request_from = filter_def.request_from
+    }
+  end
+
+  sections[1].filters = restored_filters
+  return true
 end
 
 function filters.apply_circuit_offsets(record, effective_filters, offset_filters)
@@ -319,8 +538,9 @@ function filters.apply_circuit_offsets(record, effective_filters, offset_filters
     return false
   end
 
+  local offset_group = filters.get_offset_group_name(record.entity.unit_number)
   local has_offsets = offset_filters and #offset_filters > 0
-  local section = filters.find_offset_section(point, has_offsets)
+  local section = filters.find_offset_section(point, offset_group, has_offsets)
   if not section and has_offsets then
     return false
   end
@@ -371,37 +591,57 @@ function filters.apply_effective_requests(record, effective_filters)
     return false
   end
 
-  if filters.filter_definitions_equal(record.applied_filters, effective_filters) then
-    return true
-  end
-
   local point = record.entity:get_requester_point()
   if not point or not point.valid then
     return false
   end
 
-  local sections = filters.find_manual_sections(point)
-  if #sections == 0 then
+  local effective_by_key = {}
+  for _, filter_def in ipairs(effective_filters or {}) do
+    local key = filters.get_filter_definition_key(filter_def)
+    effective_by_key[key] = (effective_by_key[key] or 0) + math.max(0, math.floor(filter_def.count or 0))
+  end
+
+  local desired_by_key = {}
+  local filter_value_by_key = {}
+  for _, desired_filter in ipairs(record.desired_filters or {}) do
+    local desired_count = math.max(0, math.floor(desired_filter.count or 0))
+    if desired_count > 0 then
+      local key = filters.get_filter_definition_key(desired_filter)
+      desired_by_key[key] = (desired_by_key[key] or 0) + desired_count
+      if not filter_value_by_key[key] then
+        filter_value_by_key[key] = {
+          type = desired_filter.value.type,
+          name = desired_filter.value.name,
+          quality = desired_filter.value.quality,
+          comparator = desired_filter.value.comparator
+        }
+      end
+    end
+  end
+
+  local offset_filters = {}
+  for key, desired_count in pairs(desired_by_key) do
+    local effective_count = effective_by_key[key] or 0
+    if effective_count < desired_count then
+      offset_filters[#offset_filters + 1] = {
+        value = filter_value_by_key[key],
+        min = effective_count - desired_count
+      }
+    end
+  end
+
+  local offset_group = filters.get_offset_group_name(record.entity.unit_number)
+  local has_offsets = #offset_filters > 0
+  local section = filters.find_offset_section(point, offset_group, has_offsets)
+  if not section and has_offsets then
     return false
   end
 
-  local primary = sections[1]
   local logistic_filters = {}
   local applied_filters = {}
   for _, filter_def in ipairs(effective_filters or {}) do
     local count = math.max(0, math.floor(filter_def.count or 0))
-    local logistic_filter = {
-      value = {
-        type = filter_def.value.type,
-        name = filter_def.value.name,
-        quality = filter_def.value.quality,
-        comparator = filter_def.value.comparator
-      },
-      min = count,
-      minimum_delivery_count = filter_def.minimum_delivery_count,
-      request_from = filter_def.request_from
-    }
-    logistic_filters[#logistic_filters + 1] = logistic_filter
     applied_filters[#applied_filters + 1] = {
       value = {
         type = filter_def.value.type,
@@ -415,10 +655,21 @@ function filters.apply_effective_requests(record, effective_filters)
     }
   end
 
+  for _, offset in ipairs(offset_filters) do
+    logistic_filters[#logistic_filters + 1] = {
+      value = {
+        type = offset.value.type,
+        name = offset.value.name,
+        quality = offset.value.quality,
+        comparator = offset.value.comparator
+      },
+      min = offset.min
+    }
+  end
+
   record.applied_filters = applied_filters
-  primary.filters = logistic_filters
-  for index = 2, #sections do
-    sections[index].filters = {}
+  if section then
+    section.filters = logistic_filters
   end
 
   return true
