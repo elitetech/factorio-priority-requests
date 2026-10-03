@@ -98,11 +98,7 @@ function reconcile.reconcile_network(network_key)
       -- manually edited, so it can't be cached like a manual chest's desired_filters.
       -- point.filters is the resolved view and would already include our own previously
       -- written offset, so clear it first to read the raw circuit-requested amount.
-      local offset_section = filters.find_offset_section(point, false)
-      if offset_section and offset_section.filters_count > 0 then
-        offset_section.filters = {}
-      end
-      record.desired_filters = filters.get_point_filter_definitions(point)
+      record.desired_filters = filters.get_desired_filter_definitions(point, record.entity.unit_number)
 
       if debug_logging then
         local desired_info = {}
@@ -199,7 +195,8 @@ function reconcile.reconcile_network(network_key)
       end
       filters.apply_circuit_offsets(record, effective_filters, offset_filters)
       if debug_logging then
-        local offset_section = filters.find_offset_section(point, false)
+        local offset_group = filters.get_offset_group_name(record.entity.unit_number)
+        local offset_section = filters.find_offset_section(point, offset_group, false)
         log(string.format(
           "[priority-requests] unit=%d offset_section=%s filters_count=%s",
           record.entity.unit_number, tostring(offset_section and offset_section.valid),
