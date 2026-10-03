@@ -193,6 +193,8 @@ function requester.register_existing_requesters()
           elseif existing.applied_requests then
             record.applied_filters = filters.legacy_counts_to_filter_definitions(existing.applied_requests)
           end
+
+          filters.restore_legacy_manual_requests_if_needed(record)
         end
       end
     end
